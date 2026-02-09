@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Loader2, X, Send, Phone, PhoneOff, Mic, Settings, Menu, Download, FileText, Upload, Trash2, RefreshCw, Check, AlertCircle } from 'lucide-react'
+import { Loader2, X, Send, Phone, PhoneOff, Mic, MicOff, Settings, Menu, Download, FileText, Upload, Trash2, RefreshCw, Check, AlertCircle, PhoneCall, Volume2 } from 'lucide-react'
 
 // ============================================================================
 // Constants
@@ -19,6 +19,8 @@ import { Loader2, X, Send, Phone, PhoneOff, Mic, Settings, Menu, Download, FileT
 const AGENT_ID = '6989d4262b8988571c784a1e'
 const RAG_ID = '6989d410de7de278e55d2dfb'
 const SETTINGS_KEY = 'voice_agent_settings'
+const VOICE_SESSION_URL = 'https://voice-sip.voice.lyzr.app/session/start'
+const AUDIO_SAMPLE_RATE = 24000
 
 // ============================================================================
 // Types
@@ -52,6 +54,14 @@ interface AgentSettings {
   escalationTriggers: { label: string; enabled: boolean }[]
   businessHours: { enabled: boolean; start: string; end: string }
 }
+
+interface VoiceTranscriptEntry {
+  speaker: 'agent' | 'user'
+  text: string
+  timestamp: string
+}
+
+type CallState = 'idle' | 'connecting' | 'active' | 'ending'
 
 // ============================================================================
 // Mock Data
@@ -264,6 +274,402 @@ function TranscriptDialog({ call, onClose }: { call: CallRecord; onClose: () => 
 }
 
 // ============================================================================
+// Voice Call Panel
+// ============================================================================
+
+function VoiceCallPanel({ agentOnline }: { agentOnline: boolean }) {
+  const [callState, setCallState] = useState<CallState>('idle')
+  const [muted, setMuted] = useState(false)
+  const [duration, setDuration] = useState(0)
+  const [transcript, setTranscript] = useState<VoiceTranscriptEntry[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+
+  const wsRef = useRef<WebSocket | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const playbackCtxRef = useRef<AudioContext | null>(null)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mutedRef = useRef(false)
+  const transcriptEndRef = useRef<HTMLDivElement>(null)
+
+  // Keep mutedRef in sync with muted state
+  useEffect(() => {
+    mutedRef.current = muted
+  }, [muted])
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [transcript])
+
+  // Duration timer
+  useEffect(() => {
+    if (callState === 'active') {
+      setDuration(0)
+      timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000)
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [callState])
+
+  const formatDuration = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0')
+    const s = (secs % 60).toString().padStart(2, '0')
+    return `${m}:${s}`
+  }
+
+  const float32ToPCM16Base64 = (float32: Float32Array): string => {
+    const int16 = new Int16Array(float32.length)
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]))
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    const bytes = new Uint8Array(int16.buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    return btoa(binary)
+  }
+
+  const playAudioBase64 = useCallback((base64Audio: string) => {
+    try {
+      if (!playbackCtxRef.current || playbackCtxRef.current.state === 'closed') {
+        playbackCtxRef.current = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE })
+      }
+      const ctx = playbackCtxRef.current
+      const binaryStr = atob(base64Audio)
+      const bytes = new Uint8Array(binaryStr.length)
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i)
+      }
+      const int16 = new Int16Array(bytes.buffer)
+      const float32 = new Float32Array(int16.length)
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7fff)
+      }
+      const buffer = ctx.createBuffer(1, float32.length, AUDIO_SAMPLE_RATE)
+      buffer.getChannelData(0).set(float32)
+      const source = ctx.createBufferSource()
+      source.buffer = buffer
+      source.connect(ctx.destination)
+      source.start()
+    } catch {
+      // Silently skip playback errors for individual chunks
+    }
+  }, [])
+
+  const cleanupResources = useCallback(() => {
+    // Close WebSocket
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+
+    // Stop audio capture
+    if (processorRef.current) {
+      processorRef.current.disconnect()
+      processorRef.current = null
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+
+    // Stop microphone
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+
+    // Close playback context
+    if (playbackCtxRef.current && playbackCtxRef.current.state !== 'closed') {
+      playbackCtxRef.current.close().catch(() => {})
+      playbackCtxRef.current = null
+    }
+  }, [])
+
+  const endCall = useCallback(() => {
+    setCallState('ending')
+    cleanupResources()
+    setSessionId(null)
+    setTimeout(() => setCallState('idle'), 300)
+  }, [cleanupResources])
+
+  const startCall = useCallback(async () => {
+    if (!agentOnline) return
+    setError(null)
+    setTranscript([])
+    setCallState('connecting')
+
+    try {
+      // 1. Start voice session
+      const res = await fetch(VOICE_SESSION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: AGENT_ID }),
+      })
+
+      if (!res.ok) {
+        throw new Error(`Session start failed (${res.status})`)
+      }
+
+      const data = await res.json()
+      const wsUrl = data.wsUrl || data.ws_url
+      const sid = data.sessionId || data.session_id
+
+      if (!wsUrl) {
+        throw new Error('No WebSocket URL returned from session')
+      }
+
+      setSessionId(sid || null)
+
+      // 2. Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: AUDIO_SAMPLE_RATE,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+      streamRef.current = stream
+
+      // 3. Set up WebSocket
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setCallState('active')
+
+        // 4. Set up audio capture
+        const audioCtx = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE })
+        audioContextRef.current = audioCtx
+        const source = audioCtx.createMediaStreamSource(stream)
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1)
+        processorRef.current = processor
+
+        processor.onaudioprocess = (e) => {
+          if (wsRef.current?.readyState === WebSocket.OPEN && !mutedRef.current) {
+            const inputData = e.inputBuffer.getChannelData(0)
+            const base64 = float32ToPCM16Base64(inputData)
+            wsRef.current.send(JSON.stringify({
+              type: 'audio',
+              audio: base64,
+              sampleRate: AUDIO_SAMPLE_RATE,
+            }))
+          }
+        }
+
+        source.connect(processor)
+        processor.connect(audioCtx.destination)
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+
+          if (msg.type === 'audio' && msg.audio) {
+            playAudioBase64(msg.audio)
+          }
+
+          if (msg.type === 'transcript') {
+            const speaker = msg.role === 'user' ? 'user' : 'agent'
+            const text = msg.text || msg.content || msg.transcript || ''
+            if (text) {
+              setTranscript(prev => {
+                // If the last entry is the same speaker and is interim, replace it
+                if (msg.is_interim && prev.length > 0 && prev[prev.length - 1].speaker === speaker) {
+                  return [...prev.slice(0, -1), {
+                    speaker,
+                    text,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                  }]
+                }
+                return [...prev, {
+                  speaker,
+                  text,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                }]
+              })
+            }
+          }
+        } catch {
+          // Non-JSON message, ignore
+        }
+      }
+
+      ws.onerror = () => {
+        setError('WebSocket connection error. Please try again.')
+        cleanupResources()
+        setCallState('idle')
+      }
+
+      ws.onclose = () => {
+        setCallState(prev => prev === 'active' ? 'idle' : prev)
+      }
+
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start call'
+      setError(message)
+      setCallState('idle')
+      cleanupResources()
+    }
+  }, [agentOnline, playAudioBase64, cleanupResources])
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      cleanupResources()
+    }
+  }, [cleanupResources])
+
+  const toggleMute = useCallback(() => {
+    setMuted(prev => !prev)
+    if (streamRef.current) {
+      streamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = muted // Toggle: if currently muted, enable; if unmuted, disable
+      })
+    }
+  }, [muted])
+
+  return (
+    <div className="glass-panel rounded-2xl border border-border p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-foreground">Voice Call</h3>
+        {callState === 'active' && (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-live" />
+            <span className="text-xs text-emerald-400 font-medium">LIVE</span>
+            <span className="text-sm font-mono text-foreground ml-2">{formatDuration(duration)}</span>
+          </div>
+        )}
+        {callState === 'connecting' && (
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+            <span className="text-xs text-primary font-medium">Connecting...</span>
+          </div>
+        )}
+      </div>
+
+      {/* Idle State */}
+      {callState === 'idle' && (
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <div className="w-20 h-20 rounded-full bg-primary/15 flex items-center justify-center mb-4 border border-primary/20">
+            <PhoneCall className="w-10 h-10 text-primary" />
+          </div>
+          <p className="text-foreground font-medium mb-1">Start a Voice Call</p>
+          <p className="text-xs text-muted-foreground mb-6 max-w-[250px]">
+            Initiate a live voice conversation with the AI customer service agent
+          </p>
+          <Button
+            onClick={startCall}
+            disabled={!agentOnline}
+            size="lg"
+            className="gap-2 px-8"
+          >
+            <Phone className="w-4 h-4" />
+            {agentOnline ? 'Start Call' : 'Agent Offline'}
+          </Button>
+          {error && (
+            <div className="flex items-center gap-2 mt-4 text-red-400 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Connecting State */}
+      {callState === 'connecting' && (
+        <div className="flex flex-col items-center justify-center py-10 text-center">
+          <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-4 animate-pulse">
+            <Phone className="w-10 h-10 text-primary" />
+          </div>
+          <p className="text-foreground font-medium">Setting up voice session...</p>
+          <p className="text-xs text-muted-foreground mt-1">Requesting microphone access</p>
+        </div>
+      )}
+
+      {/* Active Call State */}
+      {(callState === 'active' || callState === 'ending') && (
+        <div className="space-y-4">
+          {/* Voice Visualizer */}
+          <div className="glass-panel-light rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <VoiceWave />
+                <span className="text-xs text-muted-foreground">
+                  {muted ? 'Microphone muted' : 'Listening...'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Volume2 className="w-3 h-3 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground">24kHz</span>
+              </div>
+            </div>
+
+            {/* Live Transcript */}
+            <ScrollArea className="max-h-[200px]">
+              <div className="space-y-2 text-sm">
+                {transcript.length > 0 ? transcript.map((entry, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <span className={`font-medium shrink-0 ${entry.speaker === 'agent' ? 'text-primary' : 'text-foreground'}`}>
+                      {entry.speaker === 'agent' ? 'Agent:' : 'You:'}
+                    </span>
+                    <span className="text-muted-foreground">{entry.text}</span>
+                  </div>
+                )) : (
+                  <p className="text-muted-foreground text-xs text-center py-4">
+                    Speak to begin the conversation...
+                  </p>
+                )}
+                <div ref={transcriptEndRef} />
+              </div>
+            </ScrollArea>
+          </div>
+
+          {/* Session Info */}
+          {sessionId && (
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <span>Session: {sessionId.slice(0, 12)}...</span>
+            </div>
+          )}
+
+          {/* Call Controls */}
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={toggleMute}
+              className={`flex-1 border-border ${muted ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {muted ? <MicOff className="w-4 h-4 mr-2" /> : <Mic className="w-4 h-4 mr-2" />}
+              {muted ? 'Unmute' : 'Mute'}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={endCall}
+              disabled={callState === 'ending'}
+              className="flex-1"
+            >
+              <PhoneOff className="w-4 h-4 mr-2" />
+              {callState === 'ending' ? 'Ending...' : 'End Call'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
 // Dashboard View
 // ============================================================================
 
@@ -334,59 +740,8 @@ function DashboardView({ showSample, agentOnline, setActiveAgentId }: { showSamp
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Active Call Panel + Call History (2 cols) */}
         <div className="xl:col-span-2 space-y-6">
-          {/* Active Call Panel */}
-          <div className="glass-panel rounded-2xl border border-border p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-foreground">Active Call</h3>
-              {showSample && agentOnline && (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-live" />
-                  <span className="text-xs text-emerald-400 font-medium">LIVE</span>
-                </div>
-              )}
-            </div>
-            {showSample && agentOnline ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-                      <Phone className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Lisa Thompson</p>
-                      <p className="text-xs text-muted-foreground">+1 (555) 901-2345</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-mono text-foreground">02:47</p>
-                    <p className="text-xs text-muted-foreground">Duration</p>
-                  </div>
-                </div>
-                <div className="glass-panel-light rounded-xl p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <VoiceWave />
-                    <span className="text-xs text-muted-foreground">Live transcript</span>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <p className="text-muted-foreground"><span className="text-primary font-medium">Agent:</span> I can help you with your subscription. Let me pull up your account.</p>
-                    <p className="text-muted-foreground"><span className="text-foreground font-medium">Customer:</span> Yes, I would like to upgrade to the premium plan.</p>
-                  </div>
-                </div>
-                <Button variant="destructive" size="sm" className="w-full">
-                  <PhoneOff className="w-4 h-4 mr-2" />
-                  End Call
-                </Button>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-10 text-center">
-                <div className="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-4">
-                  <Phone className="w-8 h-8 text-muted-foreground" />
-                </div>
-                <p className="text-muted-foreground font-medium">No active calls</p>
-                <p className="text-xs text-muted-foreground mt-1">Incoming calls will appear here when the agent is online</p>
-              </div>
-            )}
-          </div>
+          {/* Voice Call Panel */}
+          <VoiceCallPanel agentOnline={agentOnline} />
 
           {/* Call History */}
           <div className="glass-panel rounded-2xl border border-border">

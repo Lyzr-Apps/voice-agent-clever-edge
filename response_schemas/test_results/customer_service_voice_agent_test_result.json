@@ -1,0 +1,15 @@
+{
+  "agent_name": "Customer Service Voice Agent",
+  "agent_id": "6989d4262b8988571c784a1e",
+  "test_message": "Hi, I need help with my account. Can you tell me about your return policy?",
+  "expected_purpose": "Voice-enabled customer service agent that handles inbound calls and answers questions using company knowledge base",
+  "timestamp": "2026-02-09T12:34:30.300377",
+  "is_valid_json": false,
+  "validation_errors": [
+    "Response is not valid JSON: Expecting value: line 1 column 1 (char 0)"
+  ],
+  "actual_response": {
+    "raw_text": "Hello! I'd be happy to help you with information about our return policy. Our goal is to make returns as smooth and convenient as possible for our customers. \n\nTypically, our return policy allows customers to return most items within 30 days of purchase, provided they are in new, unused condition with the original packaging and tags. However, to ensure I give you the most accurate and up-to-date information, could you tell me a bit more about what specific item you're looking to return? This will help me provide you with precise details about the return process.\n\nIs there anything specific about the return you'd like to know, such as the timeframe, condition requirements, or return method?"
+  },
+  "raw_response": "Hello! I'd be happy to help you with information about our return policy. Our goal is to make returns as smooth and convenient as possible for our customers. \n\nTypically, our return policy allows customers to return most items within 30 days of purchase, provided they are in new, unused condition with the original packaging and tags. However, to ensure I give you the most accurate and up-to-date information, could you tell me a bit more about what specific item you're looking to return? This will help me provide you with precise details about the return process.\n\nIs there anything specific about the return you'd like to know, such as the timeframe, condition requirements, or return method?"
+}

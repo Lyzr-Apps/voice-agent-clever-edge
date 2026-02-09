@@ -1,0 +1,43 @@
+{
+  "agent_name": "Customer Service Voice Agent",
+  "agent_id": "6989d4262b8988571c784a1e",
+  "agent_purpose": "Voice-enabled customer service agent that handles inbound calls and answers questions using company knowledge base",
+  "description": "Voice agent that returns natural language text responses for inbound customer service calls. Response is a single text string containing the agent's conversational reply. UI should render as text and support WebSocket streaming for real-time voice interaction.",
+  "response_schema": {
+    "status": "string (success|error)",
+    "result": {
+      "response": "string",
+      "action_taken": "string (optional)",
+      "data": "object (optional, any structured data)",
+      "suggestions": [
+        "string (optional)"
+      ]
+    },
+    "metadata": {
+      "agent_name": "string",
+      "timestamp": "string (ISO)"
+    }
+  },
+  "example_response": {
+    "status": "success",
+    "result": {
+      "response": "I've completed the task you requested",
+      "action_taken": "Processed the input and generated output",
+      "data": {
+        "key": "value"
+      },
+      "suggestions": [
+        "You might also want to try X"
+      ]
+    },
+    "metadata": {
+      "agent_name": "Customer Service Voice Agent",
+      "timestamp": "2025-01-15T10:30:00Z"
+    }
+  },
+  "is_actual_tested": false,
+  "test_timestamp": null,
+  "test_message_used": "Hello, provide a sample response",
+  "raw_test_response": "Hello! Thank you for calling customer support today. I'm here to assist you with any questions or concerns you may have. Could you please tell me how I can help you? I'll do my best to provide clear and helpful information.\n\nIs there a specific issue you'd like to discuss or a question you need answered today? I'm ready and eager to help you resolve any inquiries efficiently and professionally.",
+  "test_error": "Response not valid JSON: Expecting value: line 1 column 1 (char 0)"
+}

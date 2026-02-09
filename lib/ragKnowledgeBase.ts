@@ -65,9 +65,9 @@ export interface DeleteResponse {
 /**
  * Get all documents in a knowledge base
  */
-export async function getDocuments(ragId: string): Promise<GetDocumentsResponse> {
+export async function getDocuments(): Promise<GetDocumentsResponse> {
   try {
-    const response = await fetch(`/api/rag?ragId=${encodeURIComponent(ragId)}`, {
+    const response = await fetch('/api/rag', {
       method: 'GET',
     })
 
@@ -84,7 +84,7 @@ export async function getDocuments(ragId: string): Promise<GetDocumentsResponse>
 /**
  * Upload and train a document to the knowledge base
  */
-export async function uploadAndTrainDocument(ragId: string, file: File): Promise<UploadResponse> {
+export async function uploadAndTrainDocument(file: File): Promise<UploadResponse> {
   // Validate file type
   if (!SUPPORTED_FILE_TYPES.includes(file.type as SupportedFileType)) {
     return {
@@ -95,7 +95,6 @@ export async function uploadAndTrainDocument(ragId: string, file: File): Promise
 
   try {
     const formData = new FormData()
-    formData.append('ragId', ragId)
     formData.append('file', file, file.name)
 
     const response = await fetch('/api/rag', {
@@ -117,7 +116,6 @@ export async function uploadAndTrainDocument(ragId: string, file: File): Promise
  * Delete documents from knowledge base
  */
 export async function deleteDocuments(
-  ragId: string,
   documentNames: string[]
 ): Promise<DeleteResponse> {
   try {
@@ -126,7 +124,7 @@ export async function deleteDocuments(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ ragId, documentNames }),
+      body: JSON.stringify({ documentNames }),
     })
 
     const data = await response.json()
@@ -167,11 +165,11 @@ export function useRAGKnowledgeBase() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchDocuments = async (ragId: string) => {
+  const fetchDocuments = async () => {
     setLoading(true)
     setError(null)
 
-    const result = await getDocuments(ragId)
+    const result = await getDocuments()
 
     if (result.success) {
       setDocuments(result.documents || [])
@@ -183,15 +181,15 @@ export function useRAGKnowledgeBase() {
     return result
   }
 
-  const uploadDocument = async (ragId: string, file: File) => {
+  const uploadDocument = async (file: File) => {
     setLoading(true)
     setError(null)
 
-    const result = await uploadAndTrainDocument(ragId, file)
+    const result = await uploadAndTrainDocument(file)
 
     if (result.success) {
       // Refresh documents list
-      await fetchDocuments(ragId)
+      await fetchDocuments()
     } else {
       setError(result.error || 'Failed to upload document')
     }
@@ -200,11 +198,11 @@ export function useRAGKnowledgeBase() {
     return result
   }
 
-  const removeDocuments = async (ragId: string, documentNames: string[]) => {
+  const removeDocuments = async (documentNames: string[]) => {
     setLoading(true)
     setError(null)
 
-    const result = await deleteDocuments(ragId, documentNames)
+    const result = await deleteDocuments(documentNames)
 
     if (result.success) {
       setDocuments((prev: RAGDocument[] | null) =>

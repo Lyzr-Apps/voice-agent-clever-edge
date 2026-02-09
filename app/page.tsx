@@ -17,7 +17,6 @@ import { Loader2, X, Send, Phone, PhoneOff, Mic, MicOff, Settings, Menu, Downloa
 // ============================================================================
 
 const AGENT_ID = '6989d4262b8988571c784a1e'
-const RAG_ID = '6989d410de7de278e55d2dfb'
 const SETTINGS_KEY = 'voice_agent_settings'
 const VOICE_SESSION_URL = 'https://voice-sip.voice.lyzr.app/session/start'
 const AUDIO_SAMPLE_RATE = 24000
@@ -882,7 +881,7 @@ function KnowledgeBaseView({ showSample: _showSample, setActiveAgentId: _setActi
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    fetchDocuments(RAG_ID)
+    fetchDocuments()
   }, [])
 
   const handleUpload = async (file: File) => {
@@ -895,7 +894,7 @@ function KnowledgeBaseView({ showSample: _showSample, setActiveAgentId: _setActi
     }
     setUploading(true)
     try {
-      const result = await uploadDocument(RAG_ID, file)
+      const result = await uploadDocument(file)
       if (result?.success) {
         setUploadSuccess(`"${file.name}" uploaded successfully.`)
       } else {
@@ -909,7 +908,7 @@ function KnowledgeBaseView({ showSample: _showSample, setActiveAgentId: _setActi
   }
 
   const handleDelete = async (fileName: string) => {
-    await removeDocuments(RAG_ID, [fileName])
+    await removeDocuments([fileName])
     if (selectedDoc === fileName) setSelectedDoc(null)
   }
 
@@ -944,7 +943,7 @@ function KnowledgeBaseView({ showSample: _showSample, setActiveAgentId: _setActi
               <h3 className="text-lg font-semibold text-foreground">Knowledge Base Documents</h3>
               <p className="text-xs text-muted-foreground mt-0.5">Manage documents used by the voice agent for answering questions</p>
             </div>
-            <Button variant="outline" size="sm" onClick={() => fetchDocuments(RAG_ID)} disabled={loading} className="border-border text-muted-foreground hover:text-foreground">
+            <Button variant="outline" size="sm" onClick={() => fetchDocuments()} disabled={loading} className="border-border text-muted-foreground hover:text-foreground">
               <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>

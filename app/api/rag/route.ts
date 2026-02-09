@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const LYZR_RAG_BASE_URL = 'https://rag-prod.studio.lyzr.ai/v3'
 const LYZR_API_KEY = process.env.LYZR_API_KEY || ''
+const RAG_ID = '6989d410de7de278e55d2dfb'
 
 const FILE_TYPE_MAP: Record<string, 'pdf' | 'docx' | 'txt'> = {
   'application/pdf': 'pdf',
@@ -10,20 +11,9 @@ const FILE_TYPE_MAP: Record<string, 'pdf' | 'docx' | 'txt'> = {
 }
 
 // GET - List documents in a knowledge base
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const ragId = searchParams.get('ragId')
-
-    if (!ragId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'ragId is required',
-        },
-        { status: 400 }
-      )
-    }
+    const ragId = RAG_ID
 
     if (!LYZR_API_KEY) {
       return NextResponse.json(
@@ -101,15 +91,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const ragId = RAG_ID
     const formData = await request.formData()
-    const ragId = formData.get('ragId') as string
     const file = formData.get('file') as File
 
-    if (!ragId || !file) {
+    if (!file) {
       return NextResponse.json(
         {
           success: false,
-          error: 'ragId and file are required',
+          error: 'file is required',
         },
         { status: 400 }
       )
@@ -193,14 +183,15 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
+    const ragId = RAG_ID
     const body = await request.json()
-    const { ragId, documentNames } = body
+    const { documentNames } = body
 
-    if (!ragId || !documentNames || !Array.isArray(documentNames)) {
+    if (!documentNames || !Array.isArray(documentNames)) {
       return NextResponse.json(
         {
           success: false,
-          error: 'ragId and documentNames array are required',
+          error: 'documentNames array is required',
         },
         { status: 400 }
       )
